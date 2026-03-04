@@ -1,5 +1,5 @@
 services:
-  pi-monitor:
+  pzmon:
     build: .
     network_mode: host
     cap_add:
