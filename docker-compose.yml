@@ -1,0 +1,10 @@
+services:
+  pi-monitor:
+    build: .
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      - WIFI_IFACE=wlan0
+    restart: unless-stopped
