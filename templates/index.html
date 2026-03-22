@@ -1,0 +1,191 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pi Monitor</title>
+  <style>
+    :root{
+      --bg:#0b0f14; --card:#121826; --text:#e6edf3; --muted:#9aa4b2;
+      --border:#1f2a3a; --accent:#2dd4bf;
+    }
+    body { margin: 18px; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); }
+    h2 { margin: 0 0 6px 0; }
+    .muted { color: var(--muted); margin: 0 0 14px 0; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+    .card { background: var(--card); padding: 14px; border: 1px solid var(--border); border-radius: 14px; }
+    code { background: rgba(255,255,255,0.06); padding: 2px 6px; border-radius: 10px; }
+    .kvs b { display:inline-block; min-width: 110px; color: var(--muted); font-weight: 600; }
+    canvas { width: 100%; height: 120px; border-radius: 12px; border: 1px solid var(--border); background: rgba(255,255,255,0.03); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 13px; }
+    th { color: var(--muted); font-weight: 700; }
+    .pill { display:inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+    .error { margin: 0 0 14px 0; color: #fca5a5; display: none; }
+  </style>
+</head>
+<body>
+  <h2>PZMon</h2>
+  <p class="muted">Auto-refresh every 2s · graphs keep last ~2 minutes</p>
+  <p class="error" id="error">Status refresh failed. Retrying…</p>
+
+  <div class="grid">
+    <div class="card">
+      <h3>System</h3>
+      <div class="kvs" id="sys">Loading…</div>
+    </div>
+
+    <div class="card">
+      <h3>Wi-Fi</h3>
+      <div class="kvs" id="wifi">Loading…</div>
+      <div style="margin-top:10px">
+        <div class="pill">Signal history</div>
+        <canvas id="wifiChart" width="600" height="180"></canvas>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>CPU</h3>
+      <div class="kvs" id="cpu">Loading…</div>
+      <div style="margin-top:10px">
+        <div class="pill">CPU % history</div>
+        <canvas id="cpuChart" width="600" height="180"></canvas>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Memory</h3>
+      <div class="kvs" id="mem">Loading…</div>
+      <div style="margin-top:10px">
+        <div class="pill">RAM % history</div>
+        <canvas id="memChart" width="600" height="180"></canvas>
+      </div>
+    </div>
+
+    <div class="card" style="grid-column: 1 / -1;">
+      <h3>Top processes (CPU)</h3>
+      <div id="procs">Loading…</div>
+    </div>
+  </div>
+
+<script>
+const HISTORY_LEN = 60;
+const cpuHist = [];
+const memHist = [];
+const wifiHist = [];
+
+function fmtBytes(n) {
+  if (n === null || n === undefined) return "-";
+  const u = ["B","KB","MB","GB","TB"];
+  let i = 0; let x = n;
+  while (x >= 1024 && i < u.length-1) { x /= 1024; i++; }
+  return `${x.toFixed(1)} ${u[i]}`;
+}
+
+function fmtUptime(seconds) {
+  if (seconds === null || seconds === undefined) return "-";
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function pushHist(arr, v) {
+  if (v === null || v === undefined || Number.isNaN(v)) return;
+  arr.push(v);
+  while (arr.length > HISTORY_LEN) arr.shift();
+}
+
+function drawLineChart(canvasId, data, minY=0, maxY=100) {
+  const c = document.getElementById(canvasId);
+  const ctx = c.getContext("2d");
+  const w = c.width, h = c.height;
+
+  ctx.clearRect(0,0,w,h);
+
+  ctx.globalAlpha = 0.6;
+  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  ctx.lineWidth = 1;
+  for (let i=1;i<=4;i++){
+    const y = (h*i)/5;
+    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke();
+  }
+  ctx.globalAlpha = 1.0;
+
+  if (!data.length) return;
+
+  const pad = 10;
+  const x0 = pad, y0 = pad, x1 = w-pad, y1 = h-pad;
+  const dx = (x1-x0) / Math.max(1, (HISTORY_LEN-1));
+
+  ctx.strokeStyle = "rgba(45,212,191,0.9)";
+  ctx.lineWidth = 2;
+
+  ctx.beginPath();
+  for (let i=0;i<data.length;i++){
+    const v = data[i];
+    const t = Math.min(1, Math.max(0, (v - minY) / (maxY - minY)));
+    const x = x0 + i*dx;
+    const y = y1 - t*(y1-y0);
+    if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  }
+  ctx.stroke();
+}
+
+async function refresh() {
+  const errorEl = document.getElementById('error');
+  try {
+    const resp = await fetch('/api/status');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const s = await resp.json();
+    errorEl.style.display = 'none';
+
+    document.getElementById('sys').innerHTML =
+      `<b>IP</b> <code>${s.ip}</code><br>` +
+      `<b>Hostname</b> ${s.hostname}<br>` +
+      `<b>Uptime</b> ${fmtUptime(s.uptime_seconds)}<br>` +
+      `<b>CPU temp</b> ${(s.cpu_temp_c ?? "-")} °C<br>` +
+      `<b>Load</b> ${s.load1} / ${s.load5} / ${s.load15}<br>`;
+
+    document.getElementById('cpu').innerHTML =
+      `<b>CPU usage</b> ${(s.cpu_usage_percent ?? "-")} %<br>`;
+
+    document.getElementById('mem').innerHTML =
+      `<b>RAM</b> ${fmtBytes(s.mem_used)} / ${fmtBytes(s.mem_total)} (${s.mem_percent ?? "-"}%)<br>` +
+      `<b>Disk /</b> ${fmtBytes(s.disk_used)} / ${fmtBytes(s.disk_total)} (${s.disk_percent ?? "-"}%)<br>`;
+
+    const wifiLine = (s.wifi_signal_dbm !== null && s.wifi_signal_dbm !== undefined)
+      ? `${s.wifi_signal_dbm} dBm (${s.wifi_signal_percent ?? "-"}%)`
+      : "-";
+    document.getElementById('wifi').innerHTML =
+      `<b>Interface</b> ${s.wifi_iface || "wlan0"}<br>` +
+      `<b>Signal</b> ${wifiLine}<br>`;
+
+    const rows = (s.top_processes || []).map(p =>
+      `<tr><td>${p.pid}</td><td>${p.name}</td><td>${p.cpu}%</td><td>${fmtBytes(p.rss)}</td></tr>`
+    ).join("");
+    document.getElementById('procs').innerHTML =
+      `<table><thead><tr><th>PID</th><th>Name</th><th>CPU</th><th>RSS</th></tr></thead><tbody>${rows}</tbody></table>`;
+
+    pushHist(cpuHist, s.cpu_usage_percent);
+    pushHist(memHist, s.mem_percent);
+    pushHist(wifiHist, s.wifi_signal_percent);
+
+    drawLineChart("cpuChart", cpuHist, 0, 100);
+    drawLineChart("memChart", memHist, 0, 100);
+    drawLineChart("wifiChart", wifiHist, 0, 100);
+  } catch (err) {
+    errorEl.style.display = 'block';
+    console.error('refresh failed', err);
+  }
+}
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

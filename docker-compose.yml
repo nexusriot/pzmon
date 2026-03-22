@@ -7,4 +7,10 @@ services:
       - NET_RAW
     environment:
       - WIFI_IFACE=wlan0
+      - STATUS_CACHE_TTL=2.0
     restart: unless-stopped
+
+# Security note:
+# - host networking makes the service reachable on the host network stack
+# - there is no built-in auth layer in the app
+# Review firewalling / reverse-proxy auth before exposing it beyond a trusted LAN.
