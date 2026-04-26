@@ -2,6 +2,7 @@ services:
   pzmon:
     build: .
     network_mode: host
+    pid: hosts
     cap_add:
       - NET_ADMIN
       - NET_RAW
